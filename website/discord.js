@@ -108,7 +108,19 @@ function listingMessenger(config) {
 
 async function guildMember(config, userId, request = fetch) {
   if (!config?.botToken) throw new Error('Bot token missing.');
-  const response = await request('https://discord.com/api/v10/guilds/' + config.guildId + '/members/' + userId, {
+  // The guild-member route rejects "@me" for bot tokens: Discord answers
+  // "NUMBER_TYPE_COERCE: Value \"@me\" is not snowflake" (HTTP 400), which
+  // made the verification grant fail at its very first lookup. Resolve the
+  // current user's numeric id first — the same approach setup uses.
+  let target = userId;
+  if (userId === '@me') {
+    const me = await request('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: 'Bot ' + config.botToken }, signal: AbortSignal.timeout(8000), redirect: 'error',
+    });
+    if (!me.ok) throw new Error('Discord self lookup failed.');
+    target = (await me.json()).id;
+  }
+  const response = await request('https://discord.com/api/v10/guilds/' + config.guildId + '/members/' + target, {
     headers: { Authorization: 'Bot ' + config.botToken }, signal: AbortSignal.timeout(8000), redirect: 'error',
   });
   if (response.status === 404) return null;
