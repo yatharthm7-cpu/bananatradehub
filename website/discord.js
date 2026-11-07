@@ -163,9 +163,13 @@ async function removeRole(config, userId, roleId, request = fetch) {
   if (!response.ok && response.status !== 204) throw Object.assign(new Error('Discord role removal failed.'), { status: response.status });
 }
 
-// Validates the configured log channel: same guild, a supported text type,
-// reachable by the bot, and not visibly denied View Channel / Send Messages /
-// Embed Links through the @everyone overwrite. Returns the channel or null.
+// Validates the configured audit channel: same guild, a supported text type,
+// and visible to the bot (an invisible channel fails this very GET). The
+// staff-only design from the setup blueprint denies @everyone's View Channel,
+// which is expected and accepted — the audit log is never public, and the
+// bot's own Send/Embed access is proven by delivery, not guessed here: a
+// failed post becomes a durable, retryable job with a recorded last_error
+// instead of silently disabling the audit log.
 async function channelBelongsToGuild(config, channelId, request = fetch) {
   if (!config?.botToken || !/^\d{17,20}$/.test(channelId || '')) return null;
   const response = await request('https://discord.com/api/v10/channels/' + channelId, {
@@ -174,12 +178,6 @@ async function channelBelongsToGuild(config, channelId, request = fetch) {
   if (!response.ok) return null;
   const channel = await response.json();
   if (channel.guild_id !== config.guildId || ![0, 5].includes(channel.type)) return null;
-  const everyone = (channel.permission_overwrites || []).find(overwrite => overwrite.id === config.guildId && overwrite.type === 0);
-  if (everyone) {
-    const denied = BigInt(everyone.deny || '0');
-    const VIEW = 1n << 10n, SEND = 1n << 11n, EMBED = 1n << 14n; // ViewChannel, SendMessages, EmbedLinks
-    if ((denied & VIEW) === VIEW || (denied & SEND) === SEND || (denied & EMBED) === EMBED) return null;
-  }
   return channel;
 }
 

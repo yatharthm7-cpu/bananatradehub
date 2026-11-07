@@ -297,7 +297,7 @@ test('the audit embed carries authoritative facts, no secrets, and no mentions',
   assert.equal(local.calls.logs[0].channelId, LOG);
 });
 
-test('the channel gate only accepts reachable same-guild text channels', async () => {
+test('the channel gate accepts staff-only channels and rejects wrong guilds and types', async () => {
   const { channelBelongsToGuild } = require('../website/discord');
   const config = { botToken: 'test', guildId: GUILD };
   const responds = channel => async () => ({ ok: true, json: async () => channel });
@@ -308,14 +308,14 @@ test('the channel gate only accepts reachable same-guild text channels', async (
   assert.equal(await channelBelongsToGuild(config, LOG, responds({ id: LOG, guild_id: GUILD, type: 2 })), null);
   assert.equal(await channelBelongsToGuild(config, LOG, async () => ({ ok: false })), null);
   assert.equal(await channelBelongsToGuild(config, 'not-a-snowflake', responds({ id: LOG, guild_id: GUILD, type: 0 })), null);
-  // An @everyone overwrite denying View Channel, Send Messages, or Embed Links is rejected.
-  const denied = deny => ({ id: LOG, guild_id: GUILD, type: 0, permission_overwrites: [{ id: GUILD, type: 0, allow: '0', deny }] });
-  assert.equal(await channelBelongsToGuild(config, LOG, responds(denied(String(1n << 10n)))), null);
-  assert.equal(await channelBelongsToGuild(config, LOG, responds(denied(String(1n << 11n)))), null);
-  assert.equal(await channelBelongsToGuild(config, LOG, responds(denied(String(1n << 14n)))), null);
-  assert.ok(await channelBelongsToGuild(config, LOG, responds(denied('0'))));
-  // Announcement channels and permissive @everyone overwrites are accepted.
-  assert.ok(await channelBelongsToGuild(config, LOG, responds({ id: LOG, guild_id: GUILD, type: 5, permission_overwrites: [{ id: GUILD, type: 0, allow: String(1n << 10n), deny: '0' }] })));
+  // The audit channel is staff-only by design: @everyone denied View Channel
+  // (and Send/Embed) must still qualify, with the bot's own access proven by
+  // delivery rather than guessed from the @everyone overwrite.
+  const staffOnly = deny => ({ id: LOG, guild_id: GUILD, type: 0, permission_overwrites: [{ id: GUILD, type: 0, allow: '0', deny }] });
+  assert.ok(await channelBelongsToGuild(config, LOG, responds(staffOnly(String(1n << 10n)))), '@everyone ViewChannel deny must not disqualify the staff-only audit channel');
+  assert.ok(await channelBelongsToGuild(config, LOG, responds(staffOnly(String(1n << 10n | 1n << 11n | 1n << 14n)))));
+  // Announcement channels are also accepted.
+  assert.ok(await channelBelongsToGuild(config, LOG, responds({ id: LOG, guild_id: GUILD, type: 5, permission_overwrites: [] })));
 });
 
 test('a missing or misconfigured log channel never blocks the sign-in or fabricates an embed', async t => {
