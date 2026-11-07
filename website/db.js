@@ -1,4 +1,11 @@
-const { DatabaseSync } = require('node:sqlite');
+// node:sqlite is Node 22+ and only needed by the local/preview adapter. It is
+// required lazily so the hosted (Vercel) path, which always uses libSQL, never
+// crashes on a runtime without it.
+let databaseSync;
+function nodeSqlite() {
+  if (!databaseSync) databaseSync = require('node:sqlite').DatabaseSync;
+  return databaseSync;
+}
 const { mkdirSync } = require('node:fs');
 const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
@@ -151,7 +158,7 @@ const schema = `
 
 function openDatabase(file = path.join(__dirname, '..', 'data', 'marketplace.sqlite')) {
   if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
-  const raw = new DatabaseSync(file);
+  const raw = new (nodeSqlite())(file);
   raw.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
   raw.exec(schema);
   if (!raw.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'auth_method')) {
