@@ -429,7 +429,12 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
             FROM discord_links l ORDER BY l.username LIMIT 500`).all(discord?.guildId, discord?.guildId));
           const accounts = await reportFor(discord, rows, verificationDeps());
           const count = action => accounts.filter(item => item.action === action).length;
-          return json({ rulesVersion: verification.rulesVersion(), logChannelId: discord?.logChannelId || null, accounts,
+          // Owner diagnostics for stuck sign-ins: whether the audit channel
+          // actually receives posts right now, and how many durable deliveries
+          // are waiting. Non-secret facts only.
+          const auditChannel = { configured: discord?.logChannelId || null, validated: Boolean(await resolveLogChannel()) };
+          return json({ rulesVersion: verification.rulesVersion(), logChannelId: discord?.logChannelId || null, auditChannel,
+            delivery: await outbox.pending(db), accounts,
             summary: { keep: count('keep'), repair: count('repair-role'), legacy: count('remove-legacy-role'), unknown: count('unknown'), total: accounts.length } });
         }
         fail(404, 'Endpoint not found.');

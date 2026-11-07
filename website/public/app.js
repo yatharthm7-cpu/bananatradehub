@@ -153,32 +153,55 @@ const VERIFY_STATUS = {
   none: ['Not started', 'Read the rules, accept them, and sign in with Discord. The Verified Member role is granted automatically once you meet the requirements.'],
   authenticated_pending: ['Verification in progress', 'Discord is checking the requirements. This page updates automatically.'],
   role_assignment_pending: ['Verification in progress', 'The bot is granting Verified Member. This page updates automatically.'],
+  role_assignment_failed: ['Role assignment failed', 'Your sign-in is recorded, but Discord could not grant the Verified Member role right now (bot permissions, role hierarchy, or a temporary Discord outage). Use Re-check status to retry.'],
   verified: ['Verified Member', 'Verification complete. Every sign-in is recorded in the staff verification channel.'],
   blocked: ['Not eligible yet', ''],
   revoked: ['Verification inactive', VERIFY_REASONS.revoked],
 };
+const AUDIT_DELIVERY = {
+  pending: ' The staff audit notification for this sign-in is still being delivered.',
+  failed: ' The staff audit notification for this sign-in is waiting for its next delivery attempt.',
+  rate_limited: ' The staff audit notification is waiting for a Discord rate limit to clear.',
+  exhausted: ' The staff audit notification could not be delivered; staff can still see the sign-in record on the website.',
+  permanent: ' The staff audit notification could not be delivered; staff can still see the sign-in record on the website.',
+};
 let verifyTimer = null;
+let verifyFailures = 0;
+let verifyInterval = 20000;
 let verifyRulesVersion = 1;
 function eligibleText(eligibleAt) {
   if (!eligibleAt) return '';
   return ` Re-check around ${new Date(eligibleAt * 1000).toLocaleString()} in your timezone.`;
 }
 function verifyStatus(session) {
-  const view = session?.verification || { state: 'none', message: null, reason: null, eligibleAt: null };
+  const view = session?.verification || { state: 'none', message: null, reason: null, eligibleAt: null, delivery: null };
   const [title, body] = VERIFY_STATUS[view.state] || VERIFY_STATUS.none;
+  // A failed audit delivery never makes a verified member look unverified, but
+  // it does stay visible so staff know the channel post did not arrive.
+  const auditNote = view.state === 'verified' && view.delivery && view.delivery !== 'sent' ? (AUDIT_DELIVERY[view.delivery] || '') : '';
   const detail = view.state === 'blocked'
     ? (VERIFY_REASONS[view.reason] || view.message || 'You are not eligible yet.') + eligibleText(view.eligibleAt)
-    : body;
+    : body + auditNote;
   return { title, detail: detail || body, verified: view.state === 'verified', view };
 }
-function stopVerifyPolling() { clearInterval(verifyTimer); verifyTimer = null; }
+function stopVerifyPolling() { clearTimeout(verifyTimer); verifyTimer = null; verifyFailures = 0; verifyInterval = 20000; }
 async function verifyRefresh(quiet = true) {
   try {
     const result = await api('/verify/refresh', {});
+    verifyFailures = 0;
+    verifyInterval = 20000;
     if (result.view?.state === 'verified') { stopVerifyPolling(); await render(); notify('Verification complete.'); }
     else if (!quiet) notify(result.view?.message || 'Verification is still in progress.');
     return result;
-  } catch (error) { if (!quiet) notify(error.message); }
+  } catch (error) {
+    verifyFailures += 1;
+    // Bounded polling: escalate the interval and stop after five consecutive
+    // failures so a persistent API outage never spins forever. The manual
+    // Re-check button stays available and uses the authenticated session.
+    verifyInterval = Math.min(verifyInterval * 2, 60000);
+    if (verifyTimer && verifyFailures >= 5) { stopVerifyPolling(); if (!quiet) notify('Automatic checks stopped after repeated failures. Use Re-check status.'); }
+    if (!quiet) notify(error.message);
+  }
 }
 function renderVerify(session) {
   stopPolling();
@@ -205,9 +228,21 @@ function renderVerify(session) {
     checkbox.addEventListener('change', () => { loginButton.disabled = !checkbox.checked; });
   }
   if (!status.verified && signedIn && !verifyTimer) {
-    verifyTimer = setInterval(() => { if (!document.hidden) verifyRefresh(true); }, 20000);
+    // Escalating interval with a cap: 20s → 40s → 60s, reset after any
+    // successful check. Cleared by render() on every route change, so timers
+    // never leak past this page.
+    const tick = () => {
+      if (document.hidden) return;
+      verifyRefresh(true).finally(() => {
+        if (verifyTimer) verifyTimer = setTimeout(tick, verifyInterval);
+      });
+    };
+    verifyTimer = setTimeout(tick, verifyInterval);
   }
   if (status.verified) stopVerifyPolling();
+  // Keep the live state honest on every visit: a reload after the callback
+  // must not show a stale pending state when the record already completed.
+  if (signedIn && !status.verified) verifyRefresh(true);
 }
 function createListing() {
   if (!user) return go('verify');

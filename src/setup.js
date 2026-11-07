@@ -61,6 +61,21 @@ async function main({ root = defaultRoot, api: suppliedApi, settings = config, r
   const emojiSummary = configureApplicationEmojis(applicationEmoji.items || []);
   console.log(JSON.stringify({ guild: { id: guild.id, name: guild.name }, bot: bot.username, applicationEmojiCount: applicationEmoji.items?.length || 0, emojiMappings: emojiSummary.mapped, bannerSupported: guild.features.includes('BANNER'), administratorRoles: currentRoles.filter(r => BigInt(r.permissions) & P.Administrator).map(r => r.name), mode }, null, 2));
   if (mode === 'check') return;
+  // Overlap guard that also works across processes (a duplicate Pterodactyl
+  // instance would otherwise run a second setup against the same guild) and
+  // inside one process (two command invocations). The lock is guild-scoped,
+  // identified by a per-run token, and stale after 20 minutes so a crashed
+  // run cannot wedge setup forever; success releases it.
+  const lockFile = path.join(root, 'data', `setup-lock-${config.guild}.json`);
+  const runId = require('node:crypto').randomBytes(8).toString('hex');
+  const readLock = () => { try { return JSON.parse(fs.readFileSync(lockFile, 'utf8')); } catch { return null; } };
+  const releaseLock = () => { try { if (readLock()?.runId === runId) fs.unlinkSync(lockFile); } catch { /* lock release is best-effort */ } };
+  const lock = readLock();
+  if (lock && Date.now() - lock.at < 20 * 60 * 1000 && lock.runId !== runId) {
+    throw new Error('Setup is already running for this server. Wait for it to finish.');
+  }
+  save(lockFile, { pid: process.pid, runId, at: Date.now() });
+  try {
   await onProgress('Access checked. Creating or updating roles and channels…');
   save(path.join(root, 'data', `backup-${Date.now()}.json`), { guild, roles: currentRoles, channels });
   const write = async (route, body, method = 'patch', files) => api[method](route, { body, ...(files ? { files } : {}), reason: 'BananaSMP trading hub setup' });
@@ -175,6 +190,7 @@ async function main({ root = defaultRoot, api: suppliedApi, settings = config, r
   save(path.join(root, 'data', 'last-result.json'), result);
   console.log(`Applied and read back ${result.roles} human roles and ${result.channels} channels. Website-only verification is configured${website ? ` at ${website}/#verify` : ' (set WEBSITE_URL to publish the link)'}.`);
   return result;
+  } finally { releaseLock(); }
 }
 if (require.main === module) main().catch(error => {
   // Never serialize REST error objects: these may contain request credentials.

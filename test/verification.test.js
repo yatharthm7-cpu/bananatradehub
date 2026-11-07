@@ -194,15 +194,15 @@ test('a verification failure never breaks the sign-in session', async t => {
   assert.equal((await local.record()), undefined); // nothing fabricated
 });
 
-test('an unsafe role hierarchy leaves the record pending and the sign-in intact', async t => {
+test('an unsafe role hierarchy leaves the record in a retryable failed state and the sign-in intact', async t => {
   const local = await harness(t, { rolesOf: async () => [{ id: ROLE, position: 5, permissions: '0' }] }); // bot above nothing
   const result = await local.signIn();
   assert.match(result.location, /discord=pending/);
-  assert.equal((await local.record()).state, 'role_assignment_pending');
+  assert.equal((await local.record()).state, 'role_assignment_failed');
   assert.equal(local.calls.assign, 0);
 });
 
-test('protected actions fail closed without a record and for stale eligibility', async t => {
+test('verification gates protected actions while a member waits and after a failed grant', async t => {
   const png = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#9871b2' } }).png().toBuffer();
   const image = 'data:image/png;base64,' + png.toString('base64');
   const item = { catalogId: 'dragon-egg', category: 'Rare', quantity: 1, rarityReason: 'Rare dragon egg.', enchantments: [], durability: null, screenshot: image };
@@ -234,7 +234,7 @@ test('refresh completes a pending grant exactly once and never re-posts embeds',
   });
   const first = await local.signIn();
   assert.match(first.location, /discord=pending/);
-  assert.equal((await local.record()).state, 'role_assignment_pending');
+  assert.equal((await local.record()).state, 'role_assignment_failed');
   highHierarchy = false;
   const refreshed = await local.api('/verify/refresh', first.cookie, {});
   assert.equal(refreshed.status, 200);

@@ -223,7 +223,7 @@ async function processSignIn(db, config, { userId, discordId, ign, suspended, ru
     });
     return { outcome: 'verified', check, record: await loadRecord(db, discordId, guildId) };
   }
-  const opId = prior?.operation_id && prior.state === 'role_assignment_pending' ? prior.operation_id : operationId();
+  const opId = prior?.operation_id && (prior.state === 'role_assignment_pending' || prior.state === 'role_assignment_failed') ? prior.operation_id : operationId();
   await transaction(db, async () => {
     await writeRecord(db, { guildId, discordId, state: 'role_assignment_pending', opId, rulesVer });
     return queueEvent(db, { guildId, discordId, userId, eventType: 'Website sign-in — verification pending', ref: opId,
@@ -231,7 +231,15 @@ async function processSignIn(db, config, { userId, discordId, ign, suspended, ru
         status: 'Verification in progress', ign, ref: opId, websiteUrl }) : null, channelId, websiteUrl });
   });
   try { await grantVerifiedRole(config, discordId, deps); }
-  catch (error) { return { outcome: 'role_failed', reason: 'role_failed', code: error.code, opId, check }; }
+  catch (error) {
+    // Persist the failure: an indefinite "in progress" state would hide a
+    // grant error from both the member and staff. The opId is kept so a later
+    // refresh completes this same operation and emits one completed event.
+    await transaction(db, async () => {
+      await writeRecord(db, { guildId, discordId, state: 'role_assignment_failed', reason: 'role_failed', opId, rulesVer });
+    });
+    return { outcome: 'role_failed', reason: 'role_failed', code: error.code, opId, check };
+  }
   await transaction(db, async () => {
     await writeRecord(db, { guildId, discordId, state: 'verified', verifiedAt: Math.floor(Date.now() / 1000), opId: opId, rulesVer });
     return queueEvent(db, { guildId, discordId, userId, eventType: 'Website verification completed', ref: opId + '-complete',
@@ -275,10 +283,14 @@ async function refresh(db, config, { userId, discordId, ign, suspended, rulesVer
 
 async function verificationView(db, { discordId, guildId }) {
   const row = await loadRecord(db, discordId, guildId);
-  if (!row) return { state: 'none', reason: null, eligibleAt: null, verified: false, message: REASONS.missing_record, rulesVersion: null, updatedAt: null };
+  if (!row) return { state: 'none', reason: null, eligibleAt: null, verified: false, message: REASONS.missing_record, rulesVersion: null, updatedAt: null, delivery: null };
   const verified = row.state === 'verified';
   const message = verified ? null : REASONS[row.fail_reason] || REASONS.missing_record;
-  return { state: row.state, reason: row.fail_reason, eligibleAt: row.eligible_at, verified, message, rulesVersion: row.rules_version, updatedAt: row.updated };
+  // The latest durable delivery for this account separates "verified" from
+  // "verified and the staff audit reached the channel": a failed embed must
+  // never make a verified member look unverified, but it should stay visible.
+  const delivery = await db.prepare(`SELECT state FROM delivery_outbox WHERE discord_id=? ORDER BY id DESC LIMIT 1`).get(discordId) || null;
+  return { state: row.state, reason: row.fail_reason, eligibleAt: row.eligible_at, verified, message, rulesVersion: row.rules_version, updatedAt: row.updated, delivery: delivery?.state || null };
 }
 
 // Dry-run migration report for the owner: for every linked Discord account,
