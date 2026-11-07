@@ -11,7 +11,7 @@
   ],
   "crons": [
     { "path": "/api/feed-retry", "schedule": "13 2 * * *" },
-    { "path": "/api/delivery-retry", "schedule": "41 2,8,14,20 * * *" }
+    { "path": "/api/delivery-retry", "schedule": "41 2 * * *" }
   ],
   "headers": [
     {
