@@ -30,6 +30,9 @@
   .circular-nav-trigger { padding-inline: 13px; }
   .circular-nav-item { font-size: 12px; gap: 5px; min-height: 62px; }
   .circular-nav-close { width: 50px; height: 50px; }
+  /* Keep the account button inside small viewports: it carries the longest
+     label and would otherwise stretch the header past 100% width. */
+  #account-control .flow-button { white-space: nowrap; padding-inline: 10px; font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .text-reveal-cover { display: none; }

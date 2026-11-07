@@ -7,7 +7,7 @@
   <link rel="icon" href="/logo.png" type="image/png">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/spotlight.css">
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js" defer></script>
 </head>
 <body>
   <header class="top"><div class="shell top-inner">
@@ -15,7 +15,10 @@
     <div class="header-actions"><div id="navigation-control"></div><div id="notification-control"></div><div id="account-control"><button class="quiet" type="button">Sign in with Discord <span aria-hidden="true">↗</span></button></div></div>
   </div></header>
   <main class="shell" id="main"></main>
-  <footer class="shell footer"><span>BananaSMP Trading Hub</span><span>Player-to-player trades · Minecraft Java</span></footer>
+  <footer class="shell footer">
+    <nav class="footer-nav" aria-label="Footer"><a href="/#market">Marketplace</a><a href="/#how-it-works">How trading works</a><a href="/#guide">Trading guide</a><a href="/#verify">Verification</a><a href="/#desk">My trades</a></nav>
+    <span>BananaSMP Trading Hub · Player-to-player trades · Minecraft Java</span>
+  </footer>
   <dialog id="dialog"><div class="dialog-head"><h2 id="dialog-title"></h2><button class="quiet" id="close" aria-label="Close">×</button></div><div id="dialog-body"></div></dialog>
   <div role="status" id="notice"></div>
 </body>

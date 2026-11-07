@@ -3,13 +3,17 @@ import TextBlockAnimation from '@/components/ui/text-block-animation';
 import { CircularNavigation } from '@/components/ui/circular-navigation';
 
 export function mountHeadingAnimations(scope: HTMLElement) {
-  const roots = [...scope.querySelectorAll<HTMLElement>('[data-reveal-heading]')].map(host => {
+  const roots = [...scope.querySelectorAll<HTMLElement>('[data-reveal-heading],[data-reveal-section]')].map(host => {
     const root = createRoot(host);
     const hero = host.dataset.revealHeading === 'hero';
     const browse = host.dataset.revealHeading === 'Browse listings';
+    const section = host.dataset.revealSection;
     root.render(<TextBlockAnimation blockColor={hero ? '#d88ce9' : '#9862ca'} animateOnScroll={!hero}
       delay={hero ? 0.15 : 0} duration={hero ? 0.8 : 0.65}>
-      {hero ? <h1>BANANASMP<br /><span>TRADING HUB</span></h1> : browse ? <h2>Browse listings</h2> : <h1 className="page-title">{host.dataset.revealHeading}</h1>}
+      {hero ? <h1>Find rare items.<br /><span>Agree on terms. Trade in Minecraft.</span></h1>
+        : browse ? <h2>Browse listings</h2>
+        : section ? <h2 className="reveal-section-title">{section}</h2>
+        : <h1 className="page-title">{host.dataset.revealHeading}</h1>}
     </TextBlockAnimation>);
     return root;
   });

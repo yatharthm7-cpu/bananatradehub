@@ -5,7 +5,9 @@
   "main": "src/bot.js",
   "type": "commonjs",
   "license": "ISC",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test",
     "plan": "node src/setup.js plan",
@@ -16,22 +18,25 @@
     "commands:register": "node src/register-commands.js",
     "web": "node website/server.js",
     "preweb": "npm run web:build",
-    "web:build": "tsc && esbuild website/public/app.js --bundle --minify --outfile=website/dist/app.js && tailwindcss -i website/frontend/spotlight.css -o website/dist/spotlight.css --minify",
+    "web:build": "tsc && esbuild website/public/app.js --bundle --minify --format=esm --splitting --outdir=website/dist --chunk-names=chunks/[name]-[hash] && tailwindcss -i website/frontend/spotlight.css -o website/dist/spotlight.css --minify",
     "web:build:vercel": "npm run web:build && node website/vercel-assets.js",
     "typecheck": "tsc"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
+    "@react-three/fiber": "^9.8.2",
     "@vercel/functions": "^3.10.6",
     "discord.js": "^14.28.0",
     "dotenv": "^18.0.9",
     "lucide-react": "^1.69.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
     "esbuild": "^0.28.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

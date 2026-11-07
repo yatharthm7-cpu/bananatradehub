@@ -211,6 +211,13 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
           channelId: job.channel_id, embedJson: job.embed_json })) });
       }
       if (!route.startsWith('/api/')) {
+        // ESM code-splitting emits lazy chunks under /chunks/. They are same-origin
+        // static assets, served with an explicit JS MIME so module loading works.
+        const chunk = /^\/chunks\/([a-zA-Z0-9._-]+\.js)$/.exec(route);
+        if (chunk && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+          return res.end(fs.readFileSync(path.join(__dirname, 'dist', 'chunks', chunk[1])));
+        }
         const page = /^\/trade\/\d+$/.test(route) ? '/' : route;
         if (req.method !== 'GET' || !Object.hasOwn(files, page)) fail(404, 'Page not found.');
         const [filename, type] = files[page];

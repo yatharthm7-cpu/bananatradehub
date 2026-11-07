@@ -18,6 +18,48 @@ let reviewListings = [];
 let selectedCategory = 'All items';
 let version = 0;
 let noticeTimer;
+let heroScene = null;
+let heroIntersecting = true;
+let heroObserver = null;
+// Shared, mutation-only scroll progress for the hero camera (no re-renders).
+const scrollProgress = { current: 0 };
+let scrollTick = false;
+addEventListener('scroll', () => {
+  if (scrollTick) return;
+  scrollTick = true;
+  requestAnimationFrame(() => {
+    scrollProgress.current = Math.min(1, window.scrollY / Math.max(1, window.innerHeight * 0.9));
+    scrollTick = false;
+  });
+}, { passive: true });
+function heroVisibility() { return document.visibilityState === 'visible' && heroIntersecting; }
+addEventListener('visibilitychange', () => heroScene?.render(heroVisibility()));
+
+// Mounts the decorative 3D hero when supported. The static official-banner
+// art stays underneath as the fallback and is hidden only after the canvas
+// commits its first frame. Reduced motion and unsupported WebGL keep it.
+function mountHero() {
+  const heroArt = main.querySelector('#hero-art');
+  if (!heroArt) return;
+  const staticArt = heroArt.querySelector('.hero-static');
+  // React owns this host's subtree (createRoot replaces container children),
+  // so the static banner lives next to it, not inside it.
+  const sceneHost = document.createElement('div');
+  sceneHost.className = 'hero-scene-host';
+  heroArt.appendChild(sceneHost);
+  heroScene = mountHeroScene(sceneHost, {
+    scrollProgress,
+    onReady: () => staticArt?.classList.add('is-hidden'),
+  });
+  if (!heroScene.capable) return;
+  heroScene.render(heroVisibility());
+  heroObserver?.disconnect();
+  heroObserver = new IntersectionObserver(entries => {
+    heroIntersecting = entries.some(entry => entry.isIntersecting);
+    heroScene?.render(heroVisibility());
+  }, { threshold: 0.04 });
+  heroObserver.observe(heroArt);
+}
 // Phase 2: lightweight visibility-aware polling state.
 let pollTimer = null;
 let pollFailures = 0;
@@ -265,11 +307,13 @@ function marketplace(listings) {
     const details = JSON.parse(listing.details);
     return { ...listing, details, icon: catalog.find(item => item.id === details.catalogId)?.icon };
   });
-  main.innerHTML = `<section class="hero"><div class="hero-art"><img src="/banner.png" alt="Official BananaSMP banner"></div>
-    <div class="hero-copy"><div class="eyebrow"><i class="dot"></i> Minecraft Java · Player marketplace</div>
+  main.innerHTML = `<section class="hero">
+    <div class="hero-art" id="hero-art" aria-hidden="true"><div class="hero-static"><img src="/banner.png" alt=""></div></div>
+    <div class="hero-copy"><div class="eyebrow"><i class="dot"></i> BananaSMP Trading Hub · Minecraft Java</div>
     <div data-reveal-heading="hero"></div>
-    <p>Browse rare gear and P2W items with screenshots reviewed by BananaSMP staff.</p>
-    <div class="actions"><a class="primary" href="#browse">Browse items ↓</a>${button('+ Post a listing', 'new')}</div></div></section>
+    <p>A player-to-player marketplace for rare gear and P2W items. Every listing is submitted with an in-game screenshot and reviewed by BananaSMP staff before publication.</p>
+    <div class="actions"><a class="primary" href="#browse">Browse items ↓</a>${button('+ Post a listing', 'new')}${user ? '' : button('Sign in with Discord', 'login')}</div></div></section>
+    <section class="section-panel" data-reveal>
     <div class="section-head" id="browse"><div><div class="eyebrow">The exchange</div><div data-reveal-heading="Browse listings"></div>
     <p>${listings.length ? 'Find your next trade by item, category, or seller.' : 'Approved listings from verified members appear here.'}</p></div></div>
     ${listings.length ? `<div class="controls"><input id="search" type="search" aria-label="Search listings" placeholder="Search items, offers, or players…">
@@ -277,7 +321,31 @@ function marketplace(listings) {
     <div class="controls"><input id="enchant" type="search" aria-label="Enchantment" placeholder="Enchantment, e.g. Sharpness">
     <input id="enchant-level" type="number" min="1" max="255" aria-label="Minimum enchantment level" placeholder="Minimum level"></div>
     <div class="tabs" aria-label="Filter by category">${categories.map(c => `<button class="tab" data-category="${c}" aria-pressed="${c === selectedCategory}">${c}</button>`).join('')}</div>` : ''}
-    <div id="listing-results" aria-live="polite"></div>`;
+    <div id="listing-results" aria-live="polite"></div>
+    </section>
+    <section class="how-works panel-section" id="how-it-works" data-reveal>
+      <div class="section-head"><div><div class="eyebrow">The process</div><div data-reveal-section="How trading works"></div>
+      <p>From sign-in to confirmed receipt.</p></div></div>
+      <ol class="steps">
+        <li data-reveal data-reveal-delay="0"><strong>01 · Sign in and verify</strong><span>Read the rules on the verification page and sign in with Discord. The bot grants Verified Member once your account meets the requirements.</span></li>
+        <li data-reveal data-reveal-delay="90"><strong>02 · Post or browse</strong><span>Submit a Rare or P2W listing with an in-game screenshot, or browse approved listings posted by verified members.</span></li>
+        <li data-reveal data-reveal-delay="180"><strong>03 · Negotiate</strong><span>Make a structured offer with its own screenshots, or counter. Only the recorded terms are binding.</span></li>
+        <li data-reveal data-reveal-delay="270"><strong>04 · Exchange in Minecraft</strong><span>Once accepted, the listing is reserved and the agreement is frozen. Meet in-game and trade by hand.</span></li>
+        <li data-reveal data-reveal-delay="360"><strong>05 · Confirm receipt</strong><span>Each player confirms “I received the agreed items.” Disputes with evidence go to staff review.</span></li>
+      </ol>
+    </section>
+    <section class="policies panel-section" data-reveal>
+      <div class="section-head"><div><div class="eyebrow">Trading policies</div><div data-reveal-section="Protections and limits"></div>
+      <p>What the marketplace enforces — and what it cannot do.</p></div></div>
+      <div class="policy-grid">
+        <article class="policy" data-reveal data-reveal-delay="0"><h3>Compulsory evidence</h3><p>Every listing and structured offer needs a genuine in-game screenshot. Listings without evidence are never published.</p></article>
+        <article class="policy" data-reveal data-reveal-delay="90"><h3>Staff review</h3><p>Approvals and rejections are recorded per listing with a reason, and rejected sellers are notified through the inbox.</p></article>
+        <article class="policy" data-reveal data-reveal-delay="180"><h3>Private agreements</h3><p>Accepted terms are immutable snapshots with SHA-256 evidence. Offer screenshots stay private to the two participants and staff.</p></article>
+        <article class="policy" data-reveal data-reveal-delay="270"><h3>Nine-listing limit</h3><p>Each member holds at most nine open, pending, or reserved listings, so inventory stays current and reviewable.</p></article>
+      </div>
+      <p class="policy-limits" data-reveal data-reveal-delay="360">Not provided: verified Minecraft account ownership, automatic in-game delivery, or escrow. Items are exchanged manually inside Minecraft; middleman custody can still lose or misuse assets.</p>
+    </section>`;
+  mountHero();
   const results = main.querySelector('#listing-results');
   if (!listings.length) {
     results.innerHTML = `<div class="empty marketplace-empty"><strong>No approved listings yet</strong>
@@ -491,6 +559,10 @@ async function render() {
   playerProfile = undefined;
   headingAnimations?.dispose();
   headingAnimations = undefined;
+  heroScene?.dispose();
+  heroScene = undefined;
+  heroObserver?.disconnect();
+  heroObserver = null;
   stopPolling();
   stopVerifyPolling();
   const current = ++version;
@@ -548,7 +620,10 @@ async function render() {
   } catch (error) {
     if (current === version) main.innerHTML = empty(escapeHtml(error.message));
   } finally {
-    if (current === version) headingAnimations = mountHeadingAnimations(main);
+    if (current === version) {
+      headingAnimations = mountHeadingAnimations(main);
+      revealScope(main);
+    }
   }
 }
 document.addEventListener('click', async event => {
@@ -682,4 +757,6 @@ import { mountOfferBuilder } from '../frontend/offer-builder';
 import { renderTradeRoom, itemCard } from '../frontend/trade-room';
 import { mountNotificationBell } from '../frontend/notification-inbox';
 import { matchReceipt, matchArrangement, matchArrangementAck, matchCancellation, plainObject } from '../frontend/route-helpers';
+import { mountHeroScene } from '../frontend/hero-scene';
+import { revealScope } from '../frontend/scroll-reveal';
 
