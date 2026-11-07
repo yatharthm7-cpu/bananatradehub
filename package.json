@@ -1,0 +1,41 @@
+{
+  "name": "bananatrade-hub",
+  "version": "2.0.0",
+  "description": "BananaSMP Trading Hub — Rare/P2W item marketplace with Discord-only auth, structured offers, and a companion community bot",
+  "main": "src/bot.js",
+  "type": "commonjs",
+  "license": "ISC",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test",
+    "plan": "node src/setup.js plan",
+    "check": "node src/setup.js check",
+    "setup": "node src/setup.js apply",
+    "emoji:add": "node src/import-emoji.js",
+    "start": "node src/bot.js",
+    "commands:register": "node src/register-commands.js",
+    "web": "node website/server.js",
+    "preweb": "npm run web:build",
+    "web:build": "tsc && esbuild website/public/app.js --bundle --minify --outfile=website/dist/app.js && tailwindcss -i website/frontend/spotlight.css -o website/dist/spotlight.css --minify",
+    "web:build:vercel": "npm run web:build && node website/vercel-assets.js",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@vercel/functions": "^3.10.6",
+    "discord.js": "^14.28.0",
+    "dotenv": "^18.0.9",
+    "lucide-react": "^1.69.0",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.4",
+    "typescript": "^7.0.2"
+  }
+}
