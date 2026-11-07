@@ -282,6 +282,13 @@ async function openHostedDatabase({ url, authToken, client: suppliedClient }) {
     return db;
   } catch (error) {
     client.close();
+    // Tag the phase that failed so the 503 can separate an unreachable or
+    // unauthorized database (bot config, wrong URL/token pair) from a schema
+    // or migration problem. Transport failures surface as HTTP_* (libsql) or
+    // socket errors no matter which statement tripped first.
+    const transport = /^(HTTP_|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPROTO|EPIPE|fetch|network|getaddrinfo|socket)/i
+      .test(String(error?.code || '') + ' ' + String(error?.message || ''));
+    error.dbStage = transport ? 'database_unreachable' : error.dbStage || 'database_schema';
     throw error;
   }
 }

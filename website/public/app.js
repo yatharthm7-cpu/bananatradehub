@@ -618,7 +618,14 @@ async function render() {
       if (route === 'browse') document.querySelector('#browse')?.scrollIntoView();
     }
   } catch (error) {
-    if (current === version) main.innerHTML = empty(escapeHtml(error.message));
+    // The shell stays usable: header, footer, and navigation remain mounted,
+    // and the error carries a retry so a temporary API failure (session
+    // expired, cold start, interruption) never leaves a dead page.
+    if (current === version) {
+      main.innerHTML = `<div class="empty api-down"><strong>The marketplace could not load right now.</strong>
+        <p class="muted">${escapeHtml(error.message)}</p>
+        <div class="actions">${button('Retry', 'render-retry', 'primary')}</div></div>`;
+    }
   } finally {
     if (current === version) {
       headingAnimations = mountHeadingAnimations(main);
@@ -630,6 +637,7 @@ document.addEventListener('click', async event => {
   const control = event.target.closest('[data-action]');
   const action = control?.dataset.action;
   if (action === 'refresh-trade') return render();
+  if (action === 'render-retry') return render();
   if (action?.startsWith('copy:')) {
     try { await navigator.clipboard.writeText(action.slice(5)); notify('Copied.'); } catch { notify('Could not copy. Select and copy the visible text.'); }
     return;

@@ -2,11 +2,12 @@ const { waitUntil } = require('@vercel/functions');
 const { openHostedDatabase } = require('../website/db');
 const { configuredDiscord } = require('../website/discord');
 const { createHandler } = require('../website/server');
+const { initFailureBody, initFailureLog } = require('../website/init-errors');
 
 let application;
 async function initialize() {
   const discord = configuredDiscord();
-  if (!discord || !discord.redirectUri.startsWith('https://')) throw new Error('Configure the public HTTPS Discord OAuth callback.');
+  if (!discord || !discord.redirectUri.startsWith('https:')) throw new Error('Configure the public HTTPS Discord OAuth callback.');
   const db = await openHostedDatabase({ url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN });
   return createHandler({
     db, discord, secure: true, background: waitUntil, cronSecret: process.env.CRON_SECRET,
@@ -30,9 +31,12 @@ module.exports = async (req, res) => {
     });
     const handler = await application;
     return await handler(req, res);
-  } catch {
-    console.error('Marketplace initialization failed. Check Vercel environment variables and database connectivity.');
+  } catch (error) {
+    // A failed startup must remain diagnosable from the runtime log and from
+    // the 503 itself: the response carries the failing configuration stage
+    // and variable names only — never values, URLs, or credentials.
+    console.error(initFailureLog(error));
     res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ error: 'Marketplace setup is incomplete. Ask the owner to check the hosting configuration.' }));
+    res.end(JSON.stringify(initFailureBody(error)));
   }
 };
