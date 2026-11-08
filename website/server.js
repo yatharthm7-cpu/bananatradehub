@@ -200,14 +200,31 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
         // Read-only ops lookup: the member's verification record, sign-in
         // events, and durable delivery jobs. Cron-secret protected, and the
         // canonical way to answer "what is this member's state" without a
-        // browser session.
+        // browser session. ?stats=1 additionally reports table counts, which
+        // distinguishes a database switch from an empty state.
         const member = url.searchParams.get('member');
+        const stats = url.searchParams.get('stats') === '1';
         let lookup = null;
         if (member && /^\d{17,20}$/.test(member)) {
           lookup = {
             record: await verification.loadRecord(db, member, discord?.guildId),
             events: await db.prepare('SELECT event_key,event_type FROM website_signin_events WHERE discord_id=? ORDER BY id LIMIT 10').all(member),
             jobs: await db.prepare('SELECT state,content,last_error FROM delivery_outbox WHERE discord_id=? ORDER BY id DESC LIMIT 10').all(member),
+          };
+        }
+        if (stats) {
+          const count = table => db.prepare(`SELECT count(*) AS total FROM ${table}`).get();
+          lookup = {
+            ...(lookup || {}),
+            counts: {
+              users: (await count('users')).total,
+              sessions: (await count('sessions')).total,
+              discordLinks: (await count('discord_links')).total,
+              verificationRecords: (await count('website_verification_records')).total,
+              signinEvents: (await count('website_signin_events')).total,
+              outbox: (await count('delivery_outbox')).total,
+              listings: (await count('listings')).total,
+            },
           };
         }
         // Durable retry also recovers sign-ins interrupted between the Discord
