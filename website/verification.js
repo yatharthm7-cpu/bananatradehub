@@ -267,7 +267,7 @@ async function reconcileStuck(db, config, { channelId, websiteUrl }, deps = {}) 
   const summary = { attempted: 0, completed: 0, granted: 0, skipped: 0, records: [] };
   const rows = await db.prepare(`SELECT discord_id, operation_id FROM website_verification_records
     WHERE state IN ('role_assignment_pending','role_assignment_failed') AND updated < unixepoch() - 120
-    ORDER BY updated LIMIT 50`).all();
+    ORDER BY updated LIMIT 10`).all();
   for (const row of rows) {
     summary.attempted += 1;
     const outcome = { discordId: row.discord_id, operationId: row.operation_id, completed: false };

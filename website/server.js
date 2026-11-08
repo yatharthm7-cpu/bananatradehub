@@ -162,6 +162,25 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
   // Immediate delivery attempt on supported platforms (Vercel waitUntil). Tests and
   // hosts without background support can skip it by passing a falsy background.
   const scheduleDelivery = () => { if (background) background(flushDeliveries().catch(() => console.error('Could not process the notification outbox.'))); };
+  // Prompt automatic recovery of interrupted verifications: any production
+  // request (any visitor's page load) runs the bounded reconciliation sweep at
+  // most once per RECOVER_INTERVAL per instance, in the background, so a
+  // sign-in that crashed between the role grant and the persisted completion
+  // is finished within minutes — never waiting for the daily cron, and never
+  // requiring the affected member to visit. The cron route remains the
+  // traffic-independent backstop (daily on the Hobby plan).
+  const RECOVER_INTERVAL = 5 * 60 * 1000;
+  let lastRecoveredAt = 0;
+  const scheduleRecovery = () => {
+    if (!background || !discord || Date.now() - lastRecoveredAt < RECOVER_INTERVAL) return;
+    lastRecoveredAt = Date.now();
+    background((async () => {
+      try {
+        await verification.reconcileStuck(db, discord, { channelId: await resolveLogChannel(), websiteUrl: websiteOrigin() }, verificationDeps());
+        await flushDeliveries();
+      } catch (error) { console.error('Background verification reconciliation failed.', error.message); }
+    })());
+  };
   const tradeLink = id => `/trade/${id}`;
   const audit = async (user, action, id) => (await db.prepare('INSERT INTO audit(actor,action,target) VALUES(?,?,?)').run(user.id, action, id));
   async function hideListing(id, status = 'hidden') {
@@ -224,6 +243,11 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
               signinEvents: (await count('website_signin_events')).total,
               outbox: (await count('delivery_outbox')).total,
               listings: (await count('listings')).total,
+              // A persistence probe surface: oauth_states rows are written by
+              // the public login route and expire after 10 minutes, so a fresh
+              // row proves the app write path and this read path share one
+              // database (self-cleaning test data).
+              oauthStates: (await count('oauth_states')).total,
             },
           };
         }
@@ -367,7 +391,11 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
           await requireUser();
           return json({ items: await notifications.inbox(db, user.id, { after: url.searchParams.get('after'), limit: url.searchParams.get('limit') }) });
         }
-        if (route === '/api/session') return json({
+        if (route === '/api/session') {
+          // Ordinary page traffic drives prompt recovery of interrupted
+          // verifications (bounded by scheduleRecovery's interval).
+          scheduleRecovery();
+          return json({
           user: user || null, discordEnabled: Boolean(discord),
           notificationsAvailable: Boolean(sendTradeMessage),
           tradeNotifications: Boolean(user && (await db.prepare('SELECT 1 FROM trade_notification_preferences WHERE user_id=?').get(user.id))),
@@ -376,6 +404,7 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
           verification: user && discord ? await verification.verificationView(db, { discordId: current.discord_id, guildId: discordGuild }) : null,
           rulesVersion: verification.rulesVersion(),
         });
+        }
         if (route === '/api/discord/callback') {
           if (!discord) fail(503, 'Discord sign-in is unavailable.');
           const nonce = /(?:^|;\s*)banana_oauth=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1];
