@@ -254,6 +254,65 @@ function safeRoleId(config, check) {
   catch { return null; }
 }
 
+// Durable sweep for sign-ins interrupted between the Discord role grant and
+// the persisted completion — the crash window a member cannot heal themselves
+// and no browser visit is required to reach. Executed by the cron-protected
+// retry route (Vercel cron or an authorized ops trigger), so it runs in
+// production without any user activity. Idempotent and safe to repeat: the
+// completed audit event deduplicates on the operation id (queueEvent's unique
+// event_key), records still genuinely pending (ineligible, unconfigured role,
+// transient Discord failure) are left for the next pass, and the per-record
+// outcome is read back from the record after the write.
+async function reconcileStuck(db, config, { channelId, websiteUrl }, deps = {}) {
+  const summary = { attempted: 0, completed: 0, granted: 0, skipped: 0, records: [] };
+  const rows = await db.prepare(`SELECT discord_id, operation_id FROM website_verification_records
+    WHERE state IN ('role_assignment_pending','role_assignment_failed') AND updated < unixepoch() - 120
+    ORDER BY updated LIMIT 50`).all();
+  for (const row of rows) {
+    summary.attempted += 1;
+    const outcome = { discordId: row.discord_id, operationId: row.operation_id, completed: false };
+    try {
+      const check = await eligibility(config, row.discord_id, deps);
+      const roleId = safeRoleId(config, check);
+      if (!check.eligible || !roleId) {
+        summary.skipped += 1;
+        outcome.reason = !check.eligible ? `not_eligible:${check.reason}` : 'role_unconfigured';
+        summary.records.push(outcome);
+        continue;
+      }
+      let grantedNow = false;
+      if (!check.member.roles?.includes(roleId)) {
+        await grantVerifiedRole(config, row.discord_id, deps);
+        grantedNow = true;
+        summary.granted += 1;
+      }
+      const account = await db.prepare('SELECT u.id, u.ign FROM users u JOIN discord_links l ON l.user_id=u.id WHERE l.discord_id=?').get(row.discord_id);
+      if (!account) throw new Error('no linked account for this record');
+      await transaction(db, async () => {
+        await writeRecord(db, { guildId: config.guildId, discordId: row.discord_id, state: 'verified',
+          verifiedAt: Math.floor(Date.now() / 1000), opId: row.operation_id, rulesVer: rulesVersion() });
+        return queueEvent(db, { guildId: config.guildId, discordId: row.discord_id, userId: account.id,
+          eventType: 'Website verification completed', ref: row.operation_id + '-complete',
+          embed: deps.embedFor({ eventType: 'Website verification completed', user: check.user, member: check.member,
+            status: 'Verified Member granted', ign: account.ign || null, ref: row.operation_id, websiteUrl }),
+          channelId, websiteUrl });
+      });
+      summary.completed += 1;
+      outcome.grantedNow = grantedNow;
+      const after = await loadRecord(db, row.discord_id, config.guildId);
+      outcome.state = after?.state ?? null;
+      outcome.verifiedAt = after?.verified_at ?? null;
+    } catch (error) {
+      // Transient Discord or database failure: keep the record as-is; the next
+      // cron pass retries. The cause is carried back for the operator.
+      summary.skipped += 1;
+      outcome.reason = String(error?.code ?? error?.status ?? error?.message ?? error).slice(0, 120);
+    }
+    summary.records.push(outcome);
+  }
+  return summary;
+}
+
 // Bounded re-check used by the on-page status timer and by protected actions.
 // Never re-posts the sign-in embed; it only completes or repairs the record.
 async function refresh(db, config, { userId, discordId, ign, suspended, rulesVer, channelId, websiteUrl }, deps = {}) {
@@ -317,5 +376,5 @@ module.exports = {
   REASONS, ACCOUNT_MIN_SECONDS, MEMBER_MIN_SECONDS, DEFAULT_RULES_VERSION,
   rulesVersion, operationId, eligibility, grantVerifiedRole,
   loadRecord, writeRecord, queueEvent, signInEmbed, processSignIn, refresh,
-  verificationView, migrationReport, cutoverAction,
+  verificationView, migrationReport, cutoverAction, reconcileStuck,
 };

@@ -197,8 +197,21 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
       }
       if (route === '/api/delivery-retry') {
         if (req.method !== 'GET' || !cronSecret || req.headers.authorization !== 'Bearer ' + cronSecret) fail(403, 'Forbidden.');
+        // Durable retry also recovers sign-ins interrupted between the Discord
+        // role grant and the persisted completion — the crash window no browser
+        // visit can repair. Runs on the Vercel cron (or an authorized ops
+        // trigger), so completion never depends on the member's next request.
+        let reconciliation = null;
+        if (discord) {
+          try {
+            reconciliation = await verification.reconcileStuck(db, discord, { channelId: await resolveLogChannel(), websiteUrl: websiteOrigin() }, verificationDeps());
+          } catch (error) {
+            console.error('Verification reconciliation failed.', error.message);
+            reconciliation = { attempted: 0, completed: 0, granted: 0, skipped: 0, records: [], error: String(error.message).slice(0, 200) };
+          }
+        }
         const result = await flushDeliveries();
-        return json({ ok: true, delivery: result });
+        return json({ ok: true, delivery: result, reconciliation });
       }
       // Phase 2: authenticated internal endpoint so the separately hosted
       // Pterodactyl bot can act as a continuous delivery worker without another
