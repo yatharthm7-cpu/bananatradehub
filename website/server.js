@@ -11,6 +11,7 @@ const { createMinecraftSkins } = require('./minecraft-skins');
 const { validateOffer, saveOffer, readOfferHistory, summary: offerSummary } = require('./trade-offers');
 const notifications = require('./notifications');
 const outbox = require('./outbox');
+const ops = require('./ops-health');
 const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/admin': ['index.html', 'text/html; charset=utf-8'],
@@ -59,7 +60,7 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
   minecraftSkins = createMinecraftSkins(), postVerificationLog = verificationLogMessenger(discord),
   verifyDeps = {}, verify = verification.processSignIn, refreshVerification = verification.refresh,
   reportFor = verification.migrationReport, memberLookup = guildMember, removeRoleFn = removeRole,
-  logChannelValidate = channelBelongsToGuild } = {}) {
+  logChannelValidate = channelBelongsToGuild, opsDeps = {} } = {}) {
   const attempts = new Map();
   const adminIds = new Set(discord?.adminIds || []);
   const allListings = `SELECT l.*, u.ign AS seller, p.details, p.review_note FROM listings l
@@ -184,6 +185,9 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
       try {
         await verification.reconcileStuck(db, discord, { channelId: await resolveLogChannel(), websiteUrl: websiteOrigin() }, verificationDeps());
         await flushDeliveries();
+        // The traffic-driven sweep is a sweep too: stamp last_sweep so the ops
+        // roll-up can tell "no sweeps running" from "only the cron is missing".
+        await ops.recordHeartbeat(db, ops.HEARTBEAT_KEYS.sweep).catch(error => console.error('Heartbeat write failed.', error.message));
       } catch (error) { console.error('Background verification reconciliation failed.', error.message); }
     })());
   };
@@ -222,11 +226,11 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
       }
       if (route === '/api/delivery-retry') {
         if (req.method !== 'GET' || !cronSecret || req.headers.authorization !== 'Bearer ' + cronSecret) fail(403, 'Forbidden.');
-        // Read-only ops lookup: the member's verification record, sign-in
-        // events, and durable delivery jobs. Cron-secret protected, and the
-        // canonical way to answer "what is this member's state" without a
-        // browser session. ?stats=1 additionally reports table counts, which
-        // distinguishes a database switch from an empty state.
+        // Every authorized fire is a liveness proof: the cron, the app, and the
+        // database are all alive at this instant. ?stats=1 also builds the
+        // consolidated ops roll-up (deploy SHA, counts, audit channel, role
+        // hierarchy, heartbeats) — everything check-production.js prints.
+        await ops.recordHeartbeat(db, ops.HEARTBEAT_KEYS.cron).catch(error => console.error('Heartbeat write failed.', error.message));
         const member = url.searchParams.get('member');
         const stats = url.searchParams.get('stats') === '1';
         let lookup = null;
@@ -237,26 +241,6 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
             jobs: await db.prepare('SELECT state,content,last_error FROM delivery_outbox WHERE discord_id=? ORDER BY id DESC LIMIT 10').all(member),
           };
         }
-        if (stats) {
-          const count = table => db.prepare(`SELECT count(*) AS total FROM ${table}`).get();
-          lookup = {
-            ...(lookup || {}),
-            counts: {
-              users: (await count('users')).total,
-              sessions: (await count('sessions')).total,
-              discordLinks: (await count('discord_links')).total,
-              verificationRecords: (await count('website_verification_records')).total,
-              signinEvents: (await count('website_signin_events')).total,
-              outbox: (await count('delivery_outbox')).total,
-              listings: (await count('listings')).total,
-              // A persistence probe surface: oauth_states rows are written by
-              // the public login route and expire after 10 minutes, so a fresh
-              // row proves the app write path and this read path share one
-              // database (self-cleaning test data).
-              oauthStates: (await count('oauth_states')).total,
-            },
-          };
-        }
         // Durable retry also recovers sign-ins interrupted between the Discord
         // role grant and the persisted completion — the crash window no browser
         // visit can repair. Runs on the Vercel cron (or an authorized ops
@@ -265,13 +249,33 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
         if (discord) {
           try {
             reconciliation = await verification.reconcileStuck(db, discord, { channelId: await resolveLogChannel(), websiteUrl: websiteOrigin() }, verificationDeps());
+            await ops.recordHeartbeat(db, ops.HEARTBEAT_KEYS.sweep).catch(error => console.error('Heartbeat write failed.', error.message));
           } catch (error) {
             console.error('Verification reconciliation failed.', error.message);
             reconciliation = { attempted: 0, completed: 0, granted: 0, skipped: 0, records: [], error: String(error.message).slice(0, 200) };
           }
         }
+        // The config-drift canary runs on the same trigger as the sweep: the
+        // configured role and audit channel are compared against the live guild
+        // and the last /setup state, the warnings land in this response, and a
+        // rate-limited operator notice goes to the staff audit channel. It runs
+        // after the sweep so the roll-up reports the heartbeats of this fire.
+        const health = await ops.opsHealth(db, discord, {
+          // The live REST helpers are the default; opsDeps lets tests and local
+          // runs substitute probes instead of hitting the real guild.
+          rolesOf: guildRoles, memberOf: memberLookup, channelOf: logChannelValidate,
+          logChannelId: discord?.logChannelId, counts: null, ...opsDeps,
+        }).catch(error => {
+          console.error('Ops health roll-up failed.', error.message);
+          return { drift: [{ code: 'health_rollup_failed', detail: String(error.message).slice(0, 160), fix: 'Re-run the sweep; if this persists, check the logs with the same timestamp.' }] };
+        });
+        if (stats) lookup = { ...(lookup || {}), counts: health?.database?.counts || null, health };
         const result = await flushDeliveries();
-        return json({ ok: true, delivery: result, reconciliation, ...(lookup ? { lookup } : {}) });
+        const drift = health?.drift || [];
+        const driftNotice = drift.length
+          ? await ops.postDriftNotice(db, drift, { post: postVerificationLog, channelId: await resolveLogChannel() }).catch(() => 'failed')
+          : 'none';
+        return json({ ok: true, delivery: result, reconciliation, drift, driftNotice, ...(lookup ? { lookup } : {}) });
       }
       // Phase 2: authenticated internal endpoint so the separately hosted
       // Pterodactyl bot can act as a continuous delivery worker without another
@@ -1004,6 +1008,8 @@ function createServer(options) {
 if (require.main === module) {
   require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
   const port = Number(process.env.WEB_PORT || 3000);
-  createServer({ discord: configuredDiscord() }).listen(port, '127.0.0.1', () => console.log(`BananaSMP marketplace listening on http://127.0.0.1:${port}`));
+  // The local preview supports the same authorized sweep and ops checks as
+  // production: scripts/check-production.js --base http://127.0.0.1:3000.
+  createServer({ discord: configuredDiscord(), cronSecret: process.env.CRON_SECRET }).listen(port, '127.0.0.1', () => console.log(`BananaSMP marketplace listening on http://127.0.0.1:${port}`));
 }
 module.exports = { createServer, createHandler };

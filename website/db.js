@@ -154,6 +154,11 @@ const schema = `
       discord_id TEXT NOT NULL, event_type TEXT NOT NULL,
       event_ref TEXT NOT NULL, created INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    -- Ops health: liveness timestamps and canary throttle state. Written by the
+    -- sweep triggers, read by the stats roll-up and scripts/check-production.js.
+    CREATE TABLE IF NOT EXISTS ops_heartbeat (
+      key TEXT PRIMARY KEY, updated INTEGER NOT NULL
+    );
   `;
 
 function openDatabase(file = path.join(__dirname, '..', 'data', 'marketplace.sqlite')) {
