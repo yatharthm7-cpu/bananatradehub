@@ -197,6 +197,19 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
       }
       if (route === '/api/delivery-retry') {
         if (req.method !== 'GET' || !cronSecret || req.headers.authorization !== 'Bearer ' + cronSecret) fail(403, 'Forbidden.');
+        // Read-only ops lookup: the member's verification record, sign-in
+        // events, and durable delivery jobs. Cron-secret protected, and the
+        // canonical way to answer "what is this member's state" without a
+        // browser session.
+        const member = url.searchParams.get('member');
+        let lookup = null;
+        if (member && /^\d{17,20}$/.test(member)) {
+          lookup = {
+            record: await verification.loadRecord(db, member, discord?.guildId),
+            events: await db.prepare('SELECT event_key,event_type FROM website_signin_events WHERE discord_id=? ORDER BY id LIMIT 10').all(member),
+            jobs: await db.prepare('SELECT state,content,last_error FROM delivery_outbox WHERE discord_id=? ORDER BY id DESC LIMIT 10').all(member),
+          };
+        }
         // Durable retry also recovers sign-ins interrupted between the Discord
         // role grant and the persisted completion — the crash window no browser
         // visit can repair. Runs on the Vercel cron (or an authorized ops
@@ -211,7 +224,7 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
           }
         }
         const result = await flushDeliveries();
-        return json({ ok: true, delivery: result, reconciliation });
+        return json({ ok: true, delivery: result, reconciliation, ...(lookup ? { lookup } : {}) });
       }
       // Phase 2: authenticated internal endpoint so the separately hosted
       // Pterodactyl bot can act as a continuous delivery worker without another
