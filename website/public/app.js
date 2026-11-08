@@ -231,6 +231,7 @@ function createListing() {
     <label>Durability remaining (%)<input type="number" name="durability" min="0" max="100" placeholder="Optional"></label>
     <label>Rarity or shop origin<textarea name="rarityReason" required minlength="10" maxlength="300" placeholder="Explain how it was obtained or identify the shop item"></textarea></label>
     <label>Looking for<input name="wants" required minlength="2" maxlength="100" placeholder="What would you trade it for?"></label>
+    <p class="ask-preview" aria-live="polite" hidden></p>
     <label>Notes<textarea name="notes" maxlength="500" placeholder="Optional trade terms"></textarea></label>
     <label>Item screenshot<input name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required></label>
     <p class="muted">Show the item and its tooltip in your inventory. Make the quantity, name and enchantments readable. PNG, JPEG or WebP up to 2 MB. Approved screenshots become public.</p>`,
@@ -254,6 +255,23 @@ function createListing() {
   const search = dialogBody.querySelector('#catalog-search');
   const select = dialogBody.querySelector('[name="catalogId"]');
   const custom = dialogBody.querySelector('#other-item');
+  // Trade calculator preview: while the seller types the ask, this shows the
+  // total (or the per-item rate) implied by their own wording and the
+  // quantity. It stays quiet while the wording means nothing computable, and
+  // never replaces the ask text — which is the recorded, binding term.
+  const wantsField = dialogBody.querySelector('[name="wants"]');
+  const quantityField = dialogBody.querySelector('[name="quantity"]');
+  const askPreview = dialogBody.querySelector('.ask-preview');
+  function syncAskPreview() {
+    const calc = summarizeAsk(wantsField.value, quantityField.value);
+    askPreview.hidden = !calc;
+    askPreview.textContent = calc
+      ? `Calculator: ${calc.text} — worked out from your text; the ask you write stays the binding term.`
+      : '';
+  }
+  wantsField.addEventListener('input', syncAskPreview);
+  quantityField.addEventListener('input', syncAskPreview);
+  syncAskPreview();
   function syncSelection() {
     const entry = catalog.find(item => item.id === select.value);
     custom.hidden = !entry?.custom;
@@ -771,5 +789,6 @@ import { renderTradeRoom, itemCard } from '../frontend/trade-room';
 import { mountNotificationBell } from '../frontend/notification-inbox';
 import { matchReceipt, matchArrangement, matchArrangementAck, matchCancellation, plainObject } from '../frontend/route-helpers';
 import { mountHeroVideo } from '../frontend/hero-video';
+import { summarize as summarizeAsk } from '../frontend/ask-math';
 import { revealScope } from '../frontend/scroll-reveal';
 

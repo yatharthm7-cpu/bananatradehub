@@ -241,3 +241,10 @@ html.reveal-armed [data-reveal].reveal-shown { opacity: 1; transform: none; }
   .steps li { min-height: 0; }
   .policy-grid { grid-template-columns: 1fr; }
 }
+
+/* Trade calculator: a compact, clearly-labeled derivation under each listing
+   ask and a live preview in the posting form. It sits beside the written terms
+   (which stay binding) and never styles itself as an appraised value. */
+.ask-math { padding: 7px 0 0; font-size: 12px; color: #c3d2ae; overflow-wrap: anywhere; }
+.ask-math small { display: block; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
+.ask-preview { margin: -6px 0 0; font-size: 12px; color: #c3d2ae; overflow-wrap: anywhere; }
