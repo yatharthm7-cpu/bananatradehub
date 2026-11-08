@@ -21,6 +21,12 @@ const files = {
   '/mark.svg': ['mark.svg', 'image/svg+xml'],
   '/logo.png': ['../../assets/BananaSMP_Icon.png', 'image/png'],
   '/banner.png': ['../../assets/BananaSMP_Banner.png', 'image/png'],
+  // Hero cinematic background (provided asset) + its matching poster frame:
+  // the poster is the first thing painted and the fallback when playback is
+  // disabled or fails. Long-lived caching is safe — a new file replaces both
+  // on the next deploy.
+  '/hero.mp4': ['hero.mp4', 'video/mp4; charset=binary'],
+  '/hero-poster.jpg': ['hero-poster.jpg', 'image/jpeg'],
 };
 const digest = token => createHash('sha256').update(token).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -288,7 +294,9 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
         const page = /^\/trade\/\d+$/.test(route) ? '/' : route;
         if (req.method !== 'GET' || !Object.hasOwn(files, page)) fail(404, 'Page not found.');
         const [filename, type] = files[page];
-        res.writeHead(200, { 'Content-Type': type });
+        // Large media (the hero video/poster) is cacheable; pages never are.
+        const cacheable = filename.startsWith('hero.');
+        res.writeHead(200, { 'Content-Type': type, ...(cacheable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {}) });
         return res.end(fs.readFileSync(path.join(__dirname, 'public', filename)));
       }
       const token = getToken(req);

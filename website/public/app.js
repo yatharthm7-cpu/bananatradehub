@@ -18,47 +18,20 @@ let reviewListings = [];
 let selectedCategory = 'All items';
 let version = 0;
 let noticeTimer;
-let heroScene = null;
-let heroIntersecting = true;
-let heroObserver = null;
-// Shared, mutation-only scroll progress for the hero camera (no re-renders).
-const scrollProgress = { current: 0 };
-let scrollTick = false;
-addEventListener('scroll', () => {
-  if (scrollTick) return;
-  scrollTick = true;
-  requestAnimationFrame(() => {
-    scrollProgress.current = Math.min(1, window.scrollY / Math.max(1, window.innerHeight * 0.9));
-    scrollTick = false;
-  });
-}, { passive: true });
-function heroVisibility() { return document.visibilityState === 'visible' && heroIntersecting; }
-addEventListener('visibilitychange', () => heroScene?.render(heroVisibility()));
+let heroMedia = null;
 
-// Mounts the decorative 3D hero when supported. The static official-banner
-// art stays underneath as the fallback and is hidden only after the canvas
-// commits its first frame. Reduced motion and unsupported WebGL keep it.
+// Mounts the cinematic hero background: poster first, video layered above only
+// when playback is allowed (reduced motion and data saver see the poster).
 function mountHero() {
   const heroArt = main.querySelector('#hero-art');
   if (!heroArt) return;
-  const staticArt = heroArt.querySelector('.hero-static');
-  // React owns this host's subtree (createRoot replaces container children),
-  // so the static banner lives next to it, not inside it.
-  const sceneHost = document.createElement('div');
-  sceneHost.className = 'hero-scene-host';
-  heroArt.appendChild(sceneHost);
-  heroScene = mountHeroScene(sceneHost, {
-    scrollProgress,
-    onReady: () => staticArt?.classList.add('is-hidden'),
-  });
-  if (!heroScene.capable) return;
-  heroScene.render(heroVisibility());
-  heroObserver?.disconnect();
-  heroObserver = new IntersectionObserver(entries => {
-    heroIntersecting = entries.some(entry => entry.isIntersecting);
-    heroScene?.render(heroVisibility());
-  }, { threshold: 0.04 });
-  heroObserver.observe(heroArt);
+  disposeHeroMedia();
+  heroMedia = mountHeroVideo(heroArt.querySelector('.hero-media-slot'));
+}
+
+function disposeHeroMedia() {
+  heroMedia?.dispose();
+  heroMedia = null;
 }
 // Phase 2: lightweight visibility-aware polling state.
 let pollTimer = null;
@@ -343,7 +316,7 @@ function marketplace(listings) {
     return { ...listing, details, icon: catalog.find(item => item.id === details.catalogId)?.icon };
   });
   main.innerHTML = `<section class="hero">
-    <div class="hero-art" id="hero-art" aria-hidden="true"><div class="hero-static"><img src="/banner.png" alt=""></div></div>
+    <div class="hero-art" id="hero-art" aria-hidden="true"><div class="hero-media-slot"></div></div>
     <div class="hero-copy"><div class="eyebrow"><i class="dot"></i> BananaSMP Trading Hub · Minecraft Java</div>
     <div data-reveal-heading="hero"></div>
     <p>A player-to-player marketplace for rare gear and P2W items. Every listing is submitted with an in-game screenshot and reviewed by BananaSMP staff before publication.</p>
@@ -594,10 +567,7 @@ async function render() {
   playerProfile = undefined;
   headingAnimations?.dispose();
   headingAnimations = undefined;
-  heroScene?.dispose();
-  heroScene = undefined;
-  heroObserver?.disconnect();
-  heroObserver = null;
+  disposeHeroMedia();
   stopPolling();
   stopVerifyPolling();
   const current = ++version;
@@ -800,6 +770,6 @@ import { mountOfferBuilder } from '../frontend/offer-builder';
 import { renderTradeRoom, itemCard } from '../frontend/trade-room';
 import { mountNotificationBell } from '../frontend/notification-inbox';
 import { matchReceipt, matchArrangement, matchArrangementAck, matchCancellation, plainObject } from '../frontend/route-helpers';
-import { mountHeroScene } from '../frontend/hero-scene';
+import { mountHeroVideo } from '../frontend/hero-video';
 import { revealScope } from '../frontend/scroll-reveal';
 
