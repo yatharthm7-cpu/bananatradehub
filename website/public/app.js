@@ -15,6 +15,7 @@ let tradeNotifications;
 let notificationsAvailable;
 let rulesVersion = 1;
 let reviewListings = [];
+let adminSection = 'Item review';
 let selectedCategory = 'All items';
 let version = 0;
 let noticeTimer;
@@ -338,7 +339,7 @@ function marketplace(listings) {
     <div class="hero-copy"><div class="eyebrow"><i class="dot"></i> BananaSMP Trading Hub · Minecraft Java</div>
     <div data-reveal-heading="hero"></div>
     <p>A player-to-player marketplace for rare gear and P2W items. Every listing is submitted with an in-game screenshot and reviewed by BananaSMP staff before publication.</p>
-    <div class="actions"><a class="primary" href="#browse">Browse items ↓</a>${button('+ Post a listing', 'new')}${user ? '' : button('Sign in with Discord', 'login')}</div></div></section>
+    <div class="actions"><a class="primary" href="#browse">Browse items ↓</a>${button('Trade calculator', 'calc', 'outline')}${button('+ Post a listing', 'new')}${user ? '' : button('Sign in with Discord', 'login')}</div></div></section>
     <section class="section-panel" data-reveal>
     <div class="section-head" id="browse"><div><div class="eyebrow">The exchange</div><div data-reveal-heading="Browse listings"></div>
     <p>${listings.length ? 'Find your next trade by item, category, or seller.' : 'Approved listings from verified members appear here.'}</p></div></div>
@@ -531,8 +532,23 @@ function desk(data) {
     ['open', 'review'].includes(l.status) ? button('Withdraw', `listings/${l.id}/withdraw`) : '')).join('') || empty('Your listings will appear here.')}</div>`;
   if (user.ign) playerProfile = mountPlayerProfile(document.querySelector('#player-profile'), user.ign);
 }
-function admin(data) {
-  reviewListings = data.listings.filter(l => l.status === 'review');
+// Staff workspace: catalog value editing. Saves the estimated unit value for
+// one catalog item (blank = explicitly unpriced). Values drive the trade
+// calculator; an unpriced item there withholds the verdict instead of guessing.
+async function saveCatalogValue(itemId) {
+  const input = main.querySelector(`input[name="value:${itemId}"]`);
+  if (!input) return;
+  const raw = input.value.trim();
+  if (raw !== '' && (!/^\d+(\.\d{1,2})?$/.test(raw) || Number(raw) < 0)) {
+    return notify('Value must be a number of diamonds, or blank to mark the item unpriced.');
+  }
+  try {
+    const result = await api('/admin/catalog-values', { itemId, value: raw === '' ? null : Number(raw) });
+    notify(result.priced ? `${result.name}: ${result.value} ${result.unit || 'diamonds'} per item.` : `${result.name} is now unpriced.`);
+    render();
+  } catch (error) { notify(error.message); }
+}
+function admin(data) {  reviewListings = data.listings.filter(l => l.status === 'review');
   const sections = {
     'Item review': reviewListings.map(l => row(`#${l.id} · ${escapeHtml(l.item)} ${tag(l.category)}`,
       `${escapeHtml(l.seller)} · ${l.quantity} available`, button('Review screenshot', `review:${l.id}`, 'primary'))),
@@ -546,17 +562,25 @@ function admin(data) {
     Members: data.users.map(u => row(`${escapeHtml(u.ign || u.username || 'Legacy account')} ${tag(u.suspended ? 'suspended' : u.role)}`, escapeHtml(u.username ? '@' + u.username : 'Discord connection pending'),
       u.role === 'admin' ? '' : button(u.suspended ? 'Reinstate' : 'Suspend', `admin/users/${u.id}/${u.suspended ? 'reinstate' : 'suspend'}`, u.suspended ? 'outline' : 'outline danger'))),
     'Audit log': data.audit.map(a => row(`${escapeHtml(a.action)} · #${a.target}`, `${escapeHtml(a.ign)} · ${new Date(a.created * 1000).toLocaleString()}`)),
+    'Catalog values': data.catalog.items.map(item => row(`${escapeHtml(item.name)} ${tag(item.category)}`,
+      item.priced
+        ? `${item.value} ${data.catalog.unit} per item · set ${new Date(item.valueUpdatedAt * 1000).toLocaleDateString()}${item.updatedBy ? ' by ' + escapeHtml(item.updatedBy) : ''}`
+        : `Unpriced${item.valueUpdatedAt ? ' — the calculator withholds a verdict when an unpriced item is selected' : ' — never set'}`,
+      `<input class="value-input" type="number" name="value:${item.id}" value="${item.value ?? ''}" min="0" step="0.5" inputmode="decimal" aria-label="Estimated value in ${data.catalog.unit}"> ${button('Save', `value:${item.id}`, 'outline')}`)),
   };
   main.innerHTML = `<div class="page-head"><div class="eyebrow">Staff workspace</div><h1 class="page-title">Marketplace administration</h1>
     <p class="muted">Moderate listings, resolve active trades, and manage member access.</p></div>
     <div class="metrics">${Object.entries(sections).map(([name, items]) => `<div class="metric"><strong>${items.length}</strong>${name}</div>`).join('')}</div>
     <div class="tabs">${Object.keys(sections).map((name, i) => `<button class="tab" data-section="${name}" aria-pressed="${i === 0}">${name}</button>`).join('')}</div><div class="rows" id="admin-rows"></div>`;
   function show(name) {
+    adminSection = name;
     main.querySelector('#admin-rows').innerHTML = sections[name].join('') || empty('Nothing to review here yet.');
     main.querySelectorAll('[data-section]').forEach(tab => tab.setAttribute('aria-pressed', String(tab.dataset.section === name)));
   }
   main.querySelectorAll('[data-section]').forEach(tab => tab.addEventListener('click', () => show(tab.dataset.section)));
-  show('Item review');
+  // A save re-renders the whole page: keep the operator on the section they
+  // were editing (catalog values, for instance) instead of jumping back.
+  show(sections[adminSection] ? adminSection : 'Item review');
 }
 function showListingReview(id) {
   const listing = reviewListings.find(l => l.id === Number(id));
@@ -619,8 +643,26 @@ async function render() {
       if (current === version) tradeRoom(data);
       return;
     }
+    if (route === 'calc') {
+      // The calculator loads the staff-managed catalog (items + values) and
+      // mounts the island. It never needs a session: any visitor can compare
+      // a trade, and no API call here touches listings or trades.
+      let data;
+      try { data = await api('/catalog'); }
+      catch (error) {
+        if (current === version) main.innerHTML = '<h1 class="page-title">Trade calculator</h1>' + empty('The item catalog could not be loaded right now. Reload the page to try again.');
+        return;
+      }
+      if (current === version) {
+        main.innerHTML = `<div class="page-head"><div class="eyebrow">BananaSMP · item values</div><h1 class="page-title">Trade calculator</h1>
+          <p class="muted">Compare what you give against what you get, priced against the staff-managed catalog values in ${escapeHtml(data.unit)}.</p></div>
+          <div id="calc-root"></div>`;
+        mountCalculator(main.querySelector('#calc-root'), { catalog: data, query, notify });
+      }
+      return;
+    }
     if (route === 'guide') {
-      main.innerHTML = `<div class="page-head"><div class="eyebrow">Minecraft Java</div><h1 class="page-title">Trading guide</h1></div><div class="rows">${row('01 · Verify on the website', `Join BananaSMP, then read and accept the rules on the ${'<a href="/#verify">verification page</a>'} and sign in with Discord. The bot grants Verified Member once your account meets the requirements.`)}${row('02 · Agree on terms', 'Set your Minecraft IGN, browse listings, and make an offer. Use the trade room to review and counter offers, and propose a meeting arrangement for the exchange.')}${row('03 · Exchange in Minecraft', 'After the trade is accepted, meet in-game. Each player then confirms: I received the agreed items. Open a dispute from the trade room if something goes wrong.')}</div>`;
+      main.innerHTML = `<div class="page-head"><div class="eyebrow">Minecraft Java</div><h1 class="page-title">Trading guide</h1></div><div class="rows">${row('01 · Verify on the website', `Join BananaSMP, then read and accept the rules on the ${'<a href="/#verify">verification page</a>'} and sign in with Discord. The bot grants Verified Member once your account meets the requirements.`)}${row('02 · Agree on terms', 'Set your Minecraft IGN, browse listings, and make an offer. Use the trade room to review and counter offers, and propose a meeting arrangement for the exchange.')}${row('03 · Exchange in Minecraft', 'After the trade is accepted, meet in-game. Each player then confirms: I received the agreed items. Open a dispute from the trade room if something goes wrong.')}${row('04 · Price a trade first', 'Open the trade calculator to compare both sides of a deal against the staff-managed item values before you agree. The verdict is estimated guidance — it never obliges either player.')}</div><div class="section-head">${button('Open the trade calculator', 'calc', 'primary')}</div>`;
       return;
     }
     if (route === 'verify') { renderVerify(session); return; }
@@ -666,6 +708,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'new') return createListing();
+  if (action === 'calc') return go('calc');
   if (action === 'login') {
     // Signed-in members re-consent to the current rules and sign in again;
     // anonymous visitors are routed to the verification page, where the rules
@@ -678,6 +721,8 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'set-ign') return setIgn();
+  const valueEdit = action?.match(/^value:([a-z0-9-]+)$/);
+  if (valueEdit) return saveCatalogValue(valueEdit[1]);
   if (action === 'trade-notifications') {
     const enabled = !tradeNotifications;
     return form(enabled ? 'Enable Discord trade updates' : 'Disable Discord trade updates',
@@ -790,5 +835,6 @@ import { mountNotificationBell } from '../frontend/notification-inbox';
 import { matchReceipt, matchArrangement, matchArrangementAck, matchCancellation, plainObject } from '../frontend/route-helpers';
 import { mountHeroVideo } from '../frontend/hero-video';
 import { summarize as summarizeAsk } from '../frontend/ask-math';
+import { mountCalculator } from '../frontend/trade-calc';
 import { revealScope } from '../frontend/scroll-reveal';
 

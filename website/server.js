@@ -12,6 +12,7 @@ const { validateOffer, saveOffer, readOfferHistory, summary: offerSummary } = re
 const notifications = require('./notifications');
 const outbox = require('./outbox');
 const ops = require('./ops-health');
+const catalog = require('./catalog');
 const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/admin': ['index.html', 'text/html; charset=utf-8'],
@@ -191,7 +192,30 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
       } catch (error) { console.error('Background verification reconciliation failed.', error.message); }
     })());
   };
-  const tradeLink = id => `/trade/${id}`;
+  // The calculator's pricing source: the staff-managed estimated unit values
+// joined onto the shared catalog. Items without a row, or with a NULL value,
+// are "unpriced" — the calculator then refuses to rate a trade containing
+// them instead of guessing. Values are estimates in the catalog unit and are
+// never derived from seller asking prices.
+async function catalogPayload() {
+  const values = await db.prepare('SELECT item_id, value, updated, updated_by FROM catalog_values').all();
+  const byId = new Map(values.map(row => [row.item_id, row]));
+  return {
+    unit: catalog.UNIT,
+    items: catalog.map(item => {
+      const row = byId.get(item.id);
+      const value = row ? row.value : null;
+      return {
+        id: item.id, name: item.name, icon: item.icon, category: item.category, custom: Boolean(item.custom),
+        value: Number.isFinite(value) ? value : null,
+        priced: Number.isFinite(value),
+        valueUpdatedAt: row ? row.updated : null,
+        updatedBy: row ? row.updated_by : null,
+      };
+    }),
+  };
+}
+const tradeLink = id => `/trade/${id}`;
   const audit = async (user, action, id) => (await db.prepare('INSERT INTO audit(actor,action,target) VALUES(?,?,?)').run(user.id, action, id));
   async function hideListing(id, status = 'hidden') {
     await db.prepare('UPDATE listings SET status=? WHERE id=?').run(status, id);
@@ -299,8 +323,12 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
         if (req.method !== 'GET' || !Object.hasOwn(files, page)) fail(404, 'Page not found.');
         const [filename, type] = files[page];
         // Large media (the hero video/poster) is cacheable; pages never are.
+        // The bundle is not: the local preview must always serve the latest
+        // build, so it gets an explicit no-cache (without it the browser
+        // heuristically caches JS between restarts).
         const cacheable = filename.startsWith('hero.');
-        res.writeHead(200, { 'Content-Type': type, ...(cacheable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {}) });
+        const fresh = ['../dist/app.js', '../dist/spotlight.css'].includes(filename);
+        res.writeHead(200, { 'Content-Type': type, ...(cacheable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : fresh ? { 'Cache-Control': 'no-cache' } : {}) });
         return res.end(fs.readFileSync(path.join(__dirname, 'public', filename)));
       }
       const token = getToken(req);
@@ -479,6 +507,7 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
             JOIN users u ON u.id=e.author WHERE e.trade_id=? ORDER BY e.id`).all(trade.id)) });
         }
         if (route === '/api/listings') return json((await db.prepare(publicListings + ' ORDER BY l.id DESC LIMIT 250').all()));
+        if (route === '/api/catalog') return json(await catalogPayload());
         const publicListing = /^\/api\/listings\/(\d+)$/.exec(route);
         if (publicListing) {
           const listing = (await db.prepare(publicListings + ' AND l.id=?').get(Number(publicListing[1])));
@@ -501,6 +530,7 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
             users: (await db.prepare('SELECT u.id,u.ign,u.suspended,l.username,l.discord_id FROM users u LEFT JOIN discord_links l ON l.user_id=u.id ORDER BY u.id DESC').all())
               .map(account => ({ ...account, role: adminIds.has(account.discord_id) ? 'admin' : 'member' })),
             audit: (await db.prepare('SELECT a.*,u.ign FROM audit a JOIN users u ON u.id=a.actor ORDER BY a.id DESC LIMIT 100').all()),
+            catalog: await catalogPayload(),
           });
         }
         // Owner migration report (dry-run): the authoritative record state and
@@ -599,6 +629,17 @@ function createHandler({ db = openDatabase(), secure = false, discord = null, id
         }
         await audit(user, 'verification-cutover', removed);
         return json({ ok: true, removed, results });
+      }
+      if (route === '/api/admin/catalog-values') {
+        await requireAdmin();
+        const itemId = String(body.itemId || '');
+        const entry = catalog.find(item => item.id === itemId);
+        if (!entry) fail(400, 'Unknown catalog item.');
+        const value = body.value === null || body.value === '' ? null : Number(body.value);
+        if (value !== null && (!Number.isFinite(value) || value < 0)) fail(400, 'Value must be a number of diamonds, or blank to mark the item unpriced.');
+        await db.prepare('INSERT INTO catalog_values(item_id, value, updated, updated_by) VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET value=excluded.value, updated=excluded.updated, updated_by=excluded.updated_by')
+          .run(itemId, value, Math.floor(Date.now() / 1000), user.ign || user.username || 'admin');
+        return json({ ok: true, ...(await catalogPayload()).items.find(item => item.id === itemId) });
       }
       if (route === '/api/logout') {
         if (token) (await db.prepare('DELETE FROM sessions WHERE token=?').run(digest(token)));

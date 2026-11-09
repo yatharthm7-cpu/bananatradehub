@@ -159,6 +159,13 @@ const schema = `
     CREATE TABLE IF NOT EXISTS ops_heartbeat (
       key TEXT PRIMARY KEY, updated INTEGER NOT NULL
     );
+    -- Calculator item values: staff-managed estimated unit values in diamonds.
+    -- A NULL value means explicitly unpriced — the calculator refuses to rate a
+    -- trade containing one instead of guessing. item_id mirrors website/catalog.js
+    -- (kept a plain string, not a FK, because the canonical catalog lives in code).
+    CREATE TABLE IF NOT EXISTS catalog_values (
+      item_id TEXT PRIMARY KEY, value REAL, updated INTEGER NOT NULL, updated_by TEXT
+    );
   `;
 
 function openDatabase(file = path.join(__dirname, '..', 'data', 'marketplace.sqlite')) {
